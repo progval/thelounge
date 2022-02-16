@@ -209,7 +209,7 @@ class MessageStorage {
 		const escapedSearchTerm = query.searchTerm.replace(/([%_@])/g, "@$1");
 
 		let select =
-			'SELECT msg, type, time, network, channel FROM messages WHERE type = "message" AND json_extract(msg, "$.text") LIKE ? ESCAPE \'@\'';
+			'SELECT rowid, msg, type, time, network, channel FROM messages WHERE type = "message" AND json_extract(msg, "$.text") LIKE ? ESCAPE \'@\'';
 		const params = [`%${escapedSearchTerm}%`];
 
 		if (query.networkUuid) {
@@ -224,22 +224,35 @@ class MessageStorage {
 
 		const maxResults = 100;
 
-		select += " ORDER BY time DESC LIMIT ? OFFSET ? ";
+		if (query.lastTime) {
+			// If this is not the first page of results, get only rows whose
+			// (time, rowid) is smaller (in lexicographic order) than the results
+			// that were returned by the previous query
+			select += " AND ((time = ? AND rowid < ?) OR time < ?)";
+			params.push(query.lastTime);
+			params.push(query.lastId);
+			params.push(query.lastTime);
+		}
+
+		// Query in lexicographic order of (time, rowid)
+		select += " ORDER BY time DESC, rowid DESC";
+
+		select += " LIMIT ?";
 		params.push(maxResults);
-		query.offset = parseInt(query.offset, 10) || 0;
-		params.push(query.offset);
 
 		return new Promise((resolve, reject) => {
 			this.database.all(select, params, (err, rows) => {
 				if (err) {
 					reject(err);
 				} else {
+					const results = parseSearchRowsToMessages(rows).reverse();
 					const response = {
 						searchTerm: query.searchTerm,
 						target: query.channelName,
 						networkUuid: query.networkUuid,
-						offset: query.offset,
-						results: parseSearchRowsToMessages(query.offset, rows).reverse(),
+						lastTime: results[0] ? results[0].time : -1,
+						lastId: results[0] ? results[0].rowid : -1,
+						results: results,
 					};
 					resolve(response);
 				}
@@ -254,7 +267,7 @@ class MessageStorage {
 
 module.exports = MessageStorage;
 
-function parseSearchRowsToMessages(id, rows) {
+function parseSearchRowsToMessages(rows) {
 	const messages = [];
 
 	for (const row of rows) {
@@ -263,9 +276,8 @@ function parseSearchRowsToMessages(id, rows) {
 		msg.type = row.type;
 		msg.networkUuid = row.network;
 		msg.channelName = row.channel;
-		msg.id = id;
+		msg.id = row.id;
 		messages.push(new Msg(msg));
-		id += 1;
 	}
 
 	return messages;

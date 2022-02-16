@@ -165,8 +165,9 @@ describe("SQLite Message Storage", function () {
 					searchTerm: "msg",
 					networkUuid: "retrieval-order-test-network",
 				})
-				.then((messages) => {
-					expect(messages.results).to.have.lengthOf(100);
+				.then((response) => {
+					// First page of messages
+					expect(response.results).to.have.lengthOf(100);
 
 					const expectedMessages = [];
 
@@ -174,7 +175,25 @@ describe("SQLite Message Storage", function () {
 						expectedMessages.push(`msg ${i}`);
 					}
 
-					expect(messages.results.map((i) => i.text)).to.deep.equal(expectedMessages);
+					expect(response.results.map((i) => i.text)).to.deep.equal(expectedMessages);
+					return store.search(response);
+				})
+				.then((response) => {
+					// Second page of messages
+					expect(response.results).to.have.lengthOf(100);
+
+					const expectedMessages = [];
+
+					for (let i = 0; i < 100; ++i) {
+						expectedMessages.push(`msg ${i}`);
+					}
+
+					expect(response.results.map((i) => i.text)).to.deep.equal(expectedMessages);
+					return store.search(response);
+				})
+				.then((response) => {
+					// Third page of messages (empty)
+					expect(response.results).to.have.lengthOf(0);
 				});
 		} finally {
 			Helper.config.maxHistory = originalMaxHistory;
