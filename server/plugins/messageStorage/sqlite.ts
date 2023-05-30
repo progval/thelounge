@@ -23,15 +23,42 @@ try {
 	);
 }
 
-const currentSchemaVersion = 1520239200;
+
 
 const schema = [
-	// Schema version #1
-	"CREATE TABLE IF NOT EXISTS options (name TEXT, value TEXT, CONSTRAINT name_unique UNIQUE (name))",
-	"CREATE TABLE IF NOT EXISTS messages (network TEXT, channel TEXT, time INTEGER, type TEXT, msg TEXT)",
-	"CREATE INDEX IF NOT EXISTS network_channel ON messages (network, channel)",
-	"CREATE INDEX IF NOT EXISTS time ON messages (time)",
+	// Schema version 0
+	{
+		version: 0,
+		description: "Initial version tracking.",
+		statements: [
+			"CREATE TABLE IF NOT EXISTS options (name TEXT, value TEXT, CONSTRAINT name_unique UNIQUE (name))",
+			"INSERT INTO options (name, value) VALUES ('schema_version', 0)",
+		],
+	},
+
+	// Schema version 1
+	{
+		version: 1520239200,
+		description: "Initial schema: simple message storage.",
+		statements: [
+			"CREATE TABLE IF NOT EXISTS messages (network TEXT, channel TEXT, time INTEGER, type TEXT, msg TEXT)",
+			"CREATE INDEX IF NOT EXISTS network_channel ON messages (network, channel)",
+			"CREATE INDEX IF NOT EXISTS time ON messages (time)",
+		],
+	},
+
+	// Schema version 2
+	{
+		version: 1685471801,
+		description: "Keep track of server-sent msgid.",
+		statements: [
+			"ALTER TABLE messages ADD COLUMN msgid TEXT",
+			"CREATE UNIQUE INDEX msgid ON messages (network, msgid) WHERE msgid IS NOT NULL",
+		],
+	},
 ];
+
+const currentSchemaVersion: number = Math.max(...schema.map((schemaMigration) => schemaMigration.version));
 
 class Deferred {
 	resolve!: () => void;
@@ -87,40 +114,64 @@ class SqliteMessageStorage implements SearchableMessageStorage {
 	}
 
 	async run_migrations() {
-		for (const stmt of schema) {
-			await this.serialize_run(stmt, []);
+		// Initialize the 'options' table
+		for (const schemaMigration of schema) {
+			if (schemaMigration.version === 0) {
+				for (const stmt of schemaMigration.statements) {
+					await this.serialize_run(stmt, []);
+				}
+			}
 		}
 
 		const version = await this.serialize_get(
 			"SELECT value FROM options WHERE name = 'schema_version'"
 		);
 
+		let storedSchemaVersion: number;
+
 		if (version === undefined) {
-			// new table
 			await this.serialize_run(
-				"INSERT INTO options (name, value) VALUES ('schema_version', ?)",
-				[currentSchemaVersion]
+			   "INSERT INTO options (name, value) VALUES ('schema_version', '0')", []
 			);
-			return;
+			storedSchemaVersion = 0;
+		}
+		else {
+			storedSchemaVersion = parseInt(version.value, 10);
 		}
 
-		const storedSchemaVersion = parseInt(version.value, 10);
+		const firstInstall = storedSchemaVersion === 0;
 
-		if (storedSchemaVersion === currentSchemaVersion) {
-			return;
+		if (firstInstall) {
+			log.info(`Installing sqlite messages schema version ${currentSchemaVersion}.`);
+		}
+
+		// Only run statements which make the version go forward
+		for (const schemaMigration of schema) {
+			if (schemaMigration.version > storedSchemaVersion) {
+				await this.serialize_run("BEGIN", []);
+
+				for (const stmt of schemaMigration.statements) {
+					await this.serialize_run(stmt, []);
+				}
+
+				if (!firstInstall) {
+					log.info(
+						`Migrated SQLite schema from version ${storedSchemaVersion} to ${schemaMigration.version}: ${schemaMigration.description}.`
+					);
+				}
+
+				await this.serialize_run(
+					"UPDATE options SET value = ? WHERE name = 'schema_version'",
+					[currentSchemaVersion]
+				);
+				await this.serialize_run("COMMIT", []);
+				storedSchemaVersion = schemaMigration.version;
+			}
 		}
 
 		if (storedSchemaVersion > currentSchemaVersion) {
 			throw `sqlite messages schema version is higher than expected (${storedSchemaVersion} > ${currentSchemaVersion}). Is The Lounge out of date?`;
 		}
-
-		log.info(
-			`sqlite messages schema version is out of date (${storedSchemaVersion} < ${currentSchemaVersion}). Running migrations if any.`
-		);
-
-		await this.serialize_run("UPDATE options SET value = ? WHERE name = 'schema_version'", [
-			currentSchemaVersion,
-		]);
 	}
 
 	async close() {

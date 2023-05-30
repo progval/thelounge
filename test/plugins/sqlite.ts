@@ -62,7 +62,7 @@ describe("SQLite Message Storage", function () {
 					{
 						name: "messages",
 						tbl_name: "messages",
-						sql: "CREATE TABLE messages (network TEXT, channel TEXT, time INTEGER, type TEXT, msg TEXT)",
+						sql: "CREATE TABLE messages (network TEXT, channel TEXT, time INTEGER, type TEXT, msg TEXT, msgid TEXT)",
 					},
 				]);
 
@@ -79,7 +79,7 @@ describe("SQLite Message Storage", function () {
 
 				// Should be sqlite.currentSchemaVersion,
 				// compared as string because it's returned as such from the database
-				expect(row.value).to.equal("1520239200");
+				expect(row.value).to.equal("1685471801");
 
 				done();
 			}
